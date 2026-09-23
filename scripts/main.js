@@ -1,5 +1,5 @@
 // aa remake
-// By Steven Geeky (And djmaster72)
+// (with djmaster72)
 
 var circleRadius = 9, webRadius = 34, lineWidth = 1;
 var failColor = "radial-gradient(#ff5, #f00)", successColor = "radial-gradient(#aaf, #afa)";
