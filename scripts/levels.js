@@ -261,3 +261,249 @@ LEVELS.push(function(){
             web.reversed = toggle(web.reversed, true, false);
     }
 });
+
+// 18
+LEVELS.push(function(f){
+    if (!f)
+        alert("The web now turns the other way every time a circle lands.");
+    
+    web.numBlanks = 6;
+    addCircles(8);
+    web.rspeed = 2.5;
+    
+    // Flip the direction whenever the number of attached circles changes
+    var lastAttached = web.attached.length;
+    internalUpdate = function(){
+        if (web.attached.length != lastAttached)
+        {
+            lastAttached = web.attached.length;
+            web.reversed = !web.reversed;
+        }
+    };
+});
+
+// 19
+LEVELS.push(function(){
+    web.numBlanks = 3;
+    addCircles(16);
+    web.rspeed = 4;
+    web.reversed = true;
+    
+    web.failTimer = 12 * 60;
+});
+
+// 20
+LEVELS.push(function(f){
+    if (!f)
+        alert("Every circle you land makes the web spin a little faster.");
+    
+    web.numBlanks = 5;
+    addCircles(12);
+    web.rspeed = 1;
+    
+    internalUpdate = function(){
+        web.rspeed = 1 + web.attached.length * .4;
+    };
+});
+
+// 21
+LEVELS.push(function(){
+    web.numBlanks = 6;
+    addCircles(10);
+    web.failTimer = 20 * 60;
+    var instantiationTime = timer;
+    
+    // Like level 9, but the swing is twice as fast and reaches a higher speed
+    internalUpdate = function(){
+        web.rspeed = Math.sin((timer - instantiationTime) * Math.PI / 90) * 5;
+    };
+});
+
+// 22
+LEVELS.push(function(){
+    web.numBlanks = 7;
+    addCircles(15);
+    web.rspeed = 2;
+    web.hideCount = false;      // Show the numbers so you can see the burst count down
+    
+    // Burst fire, like level 13, but the burst is quicker
+    var spaceTimer = 0, shootInterval = 8;
+    
+    internalUpdate = function(){
+        if (getkeydown(32) && spaceTimer == 0)
+            spaceTimer++;
+        if (spaceTimer > 0)
+        {
+            spaceTimer++;
+            if (spaceTimer >= shootInterval)
+            {
+                spaceTimer = 0;
+                for (var i in circles)
+                {
+                    var c = circles[i];
+                    if (moving.indexOf(c) == -1)
+                    {
+                        moving.push(c);
+                        break;
+                    }
+                }
+            }
+        }
+    };
+});
+
+// 23
+LEVELS.push(function(){
+    web.numBlanks = 4;
+    addCircles(12);
+    web.rspeed = 2.5;
+    var instantiationTime = timer;
+    var range = 40;
+    var changeRate = 120;       // The web breathes three times faster than in level 16
+    
+    wypos = web.radius + totalWebRadius + range;
+    cypos = wypos * 2;
+    
+    internalUpdate = function(){
+        totalWebRadius = Math.abs( Math.sin((timer - instantiationTime) / changeRate) ) * range + restRadius;
+    };
+});
+
+// 24
+LEVELS.push(function(f){
+    if (!f)
+        alert("Speed and direction now change together.  A negative speed means the web turns backwards.");
+    
+    web.numBlanks = 8;
+    addCircles(8);
+    var instantiationTime = timer;
+    
+    // Negative speeds turn the web the other way
+    var speeds = [2, -3, 5, -1];
+    var sindex = 0;
+    web.rspeed = speeds[0];
+    
+    internalUpdate = function(){
+        if ((timer - instantiationTime) % 45 == 0)
+        {
+            sindex = (sindex + 1) % speeds.length;
+            web.rspeed = Math.abs(speeds[sindex]);
+            web.reversed = speeds[sindex] < 0;
+        }
+    };
+});
+
+// 25
+LEVELS.push(function(){
+    // Precision: twelve blanks, three circles, fast
+    web.numBlanks = 12;
+    addCircles(3);
+    web.rspeed = 6;
+});
+
+// 26
+LEVELS.push(function(f){
+    if (!f)
+        alert("Stop and go.  The web freezes, then lurches.");
+    
+    web.numBlanks = 6;
+    addCircles(14);
+    var instantiationTime = timer;
+    web.rspeed = 0;
+    
+    internalUpdate = function(){
+        if ((timer - instantiationTime) % 30 == 0)
+            web.rspeed = toggle(web.rspeed, 0, 6);
+    };
+});
+
+// 27
+LEVELS.push(function(){
+    web.numBlanks = 2;
+    addCircles(26);
+    web.rspeed = 2;
+    web.failTimer = 25 * 60;
+    var instantiationTime = timer;
+    
+    internalUpdate = function(){
+        if ((timer - instantiationTime) % 120 == 0)
+            web.reversed = !web.reversed;
+    };
+});
+
+// 28
+LEVELS.push(function(f){
+    if (!f)
+        alert("The speed is now picked at random.");
+    
+    web.numBlanks = 7;
+    addCircles(12);
+    web.rspeed = 3;
+    var instantiationTime = timer;
+    var speeds = [1, 2, 3, 5, 7];
+    
+    internalUpdate = function(){
+        if ((timer - instantiationTime) % 60 == 0)
+            web.rspeed = speeds[Math.floor(Math.random() * speeds.length)];
+    };
+});
+
+// 29
+LEVELS.push(function(f){
+    if (!f)
+        alert("Faster and faster.  Don't wait around.");
+    
+    web.numBlanks = 5;
+    addCircles(10);
+    web.rspeed = 1;
+    var instantiationTime = timer;
+    
+    // Accelerates from 1 up to 8 over about 14 seconds
+    internalUpdate = function(){
+        web.rspeed = Math.min(8, 1 + (timer - instantiationTime) / 120);
+    };
+});
+
+// 30
+LEVELS.push(function(){
+    web.numBlanks = 3;
+    addCircles(15);
+    web.rspeed = 3;
+    var instantiationTime = timer;
+    var range = 50;
+    var changeRate = 150;
+    
+    wypos = web.radius + totalWebRadius + range;
+    cypos = wypos * 2;
+    
+    // Breathing web that also reverses every 90 frames
+    internalUpdate = function(){
+        totalWebRadius = Math.abs( Math.sin((timer - instantiationTime) / changeRate) ) * range + restRadius;
+        if ((timer - instantiationTime) % 90 == 0)
+            web.reversed = !web.reversed;
+    };
+});
+
+// 31
+LEVELS.push(function(f){
+    if (!f)
+        alert("Last one.  Everything at once.");
+    
+    web.numBlanks = 9;
+    addCircles(11);
+    web.failTimer = 30 * 60;
+    var instantiationTime = timer;
+    var speeds = [3, 6, 2, 8];
+    var sindex = 0;
+    web.rspeed = speeds[0];
+    
+    internalUpdate = function(){
+        if ((timer - instantiationTime) % 40 == 0)
+        {
+            sindex = (sindex + 1) % speeds.length;
+            web.rspeed = speeds[sindex];
+        }
+        if ((timer - instantiationTime) % 100 == 0)
+            web.reversed = !web.reversed;
+    };
+});
