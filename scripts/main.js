@@ -26,10 +26,41 @@ var cypos, wypos;
 
 var tfailure = false;
 
+var W = 360, H = 480, dpr = 1;      // Logical canvas size; the backing store is scaled by devicePixelRatio for crisp lines
+var ripples = [];                   // Rings that spread out from a circle the moment it lands
+var selecting = false, selected = 0;    // Level select screen
+var progress = { current:0, best:0 };   // Saved in localStorage when it is available
+
+// Progress
+function loadProgress()
+{
+    try
+    {
+        var p = JSON.parse(localStorage.getItem("aa.progress"));
+        if (p && typeof p.current == "number" && typeof p.best == "number")
+            progress = p;
+    }
+    catch (e) {}
+    return progress;
+}
+function saveProgress()
+{
+    try
+    {
+        localStorage.setItem("aa.progress", JSON.stringify(progress));
+    }
+    catch (e) {}
+}
+
 // For debugging or level testing
 function loadLevel(n)
 {
     clevel = n - 1;
+    buffered = [];
+    camera.x = camera.y = 0;
+    camera.scale = 1;
+    tfailure = false;
+    mc.style.background = defaultBackground;
     advanceLevel();
 }
 
@@ -61,6 +92,36 @@ function getkeyup(kc)
 var running = [];
 var ismobile = false;
 
+// Pointer input (touch and mouse), in canvas coordinates
+function canvasPoint(cx, cy)
+{
+    var r = mc.getBoundingClientRect();
+    return { x:(cx - r.left) * W / r.width, y:(cy - r.top) * H / r.height };
+}
+function pointerAt(p)
+{
+    if (selecting)
+    {
+        var n = selectCellAt(p.x, p.y);
+        if (n != -1 && n <= progress.best)
+        {
+            selected = n;
+            selecting = false;
+            loadLevel(n);
+        }
+        return;
+    }
+    // The 'levels' word in the bottom right corner opens the level select
+    if (p.x > W - 60 && p.y > H - 30 && (circles.length || web.attached.length))
+    {
+        selecting = true;
+        selected = clevel;
+        return;
+    }
+    if (keydowns.indexOf(32) == -1)
+        keydowns.push(32);
+}
+
 window.onload = function()
 {
     mc = document.createElement("canvas");
@@ -68,20 +129,39 @@ window.onload = function()
     ctx.imageSmoothingEnabled = false;
     
     mc.style.position = "fixed";
-    mc.width = 360;
-    mc.height = 480;
+    dpr = window.devicePixelRatio || 1;
+    mc.width = W * dpr;
+    mc.height = H * dpr;
     mc.style.background = defaultBackground;
+    mc.style.touchAction = "none";
     document.body.style.background = "black";
+    document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
     
     ismobile = !!/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    totalWebRadius = (mc.width - 170) / 2;
+    totalWebRadius = (W - 170) / 2;
     restRadius = totalWebRadius;
     
     window.ontouchstart = function(e)
     {
         e.preventDefault();
-        if (keydowns.indexOf(32) == -1)
-            keydowns.push(32);
+        var t = e.touches[0] || e.changedTouches[0];
+        pointerAt(canvasPoint(t.clientX, t.clientY));
+    }
+    window.ontouchend = function(e)
+    {
+        if (keydowns.indexOf(32) != -1)
+            keydowns.splice(keydowns.indexOf(32), 1);
+    }
+    mc.onmousedown = function(e)
+    {
+        e.preventDefault();
+        pointerAt(canvasPoint(e.clientX, e.clientY));
+    }
+    window.onmouseup = function(e)
+    {
+        if (keydowns.indexOf(32) != -1)
+            keydowns.splice(keydowns.indexOf(32), 1);
     }
     
     
@@ -106,11 +186,17 @@ window.onload = function()
         mc.style.top = (window.innerHeight - h) / 2 + "px";
     }
     window.onresize = resized;
+    window.onorientationchange = function(){ setTimeout(resized, 100); };
     resized();
     
     if (ismobile)
         setTimeout(resized, 10);
     document.body.appendChild(mc);
+    
+    // Pick up where the player left off, unless a startLevel was set for testing
+    loadProgress();
+    if (startLevel == 0 && progress.current > 0)
+        clevel = Math.min(progress.current, LEVELS.length - 1) - 1;
     advanceLevel();
     
     _loop();
@@ -122,6 +208,7 @@ function advanceLevel(f)
     totalWebRadius = restRadius;
     circles = [];
     moving = [];
+    ripples = [];
     internalUpdate = function(){};
     
     web = new Web({ radius:webRadius || 7 });
@@ -137,8 +224,11 @@ function _loop()
 {
     requestAnimationFrame(_loop);
     mc.width = mc.width;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     
-    if (running.indexOf(false) == -1 && buffered.length == 0)
+    if (selecting)
+        selectScreen();
+    else if (running.indexOf(false) == -1 && buffered.length == 0)
     {
         internalUpdate();
         update();
@@ -182,10 +272,18 @@ function render()
 
 function update(ov)
 {
-    if (getkeydown(76))
+    if (getkeydown(76) && !ov)     // L: level select
     {
         keydowns = [];
-        loadLevel(+prompt("What level would you like to load?"));
+        selecting = true;
+        selected = clevel;
+        return;
+    }
+    if (getkeydown(82) && !ov)      // R: restart this level
+    {
+        keydowns = [];
+        restartLevel();
+        return;
     }
     var num = circles.length;
     if (num == 0 && web.attached.length == 0)
@@ -199,7 +297,7 @@ function update(ov)
     var cfs = 9;
     
     // Update Web
-    web.x = mc.width / 2;
+    web.x = W / 2;
     web.y = wypos;
     
     if (!ov)
@@ -261,7 +359,10 @@ function update(ov)
         ctx.strokeStyle = "black";
         var nc = transform(c);
         
-        ctx.arc(nc.x, nc.y, c.radius * camera.scale, 0, 2 * Math.PI);
+        // A circle that just landed pops a little larger, then settles (drawing only; the collision radius is unchanged)
+        if (!ov && c.hit > 0)
+            c.hit--;
+        ctx.arc(nc.x, nc.y, c.radius * camera.scale * (1 + .4 * c.hit / 10), 0, 2 * Math.PI);
         ctx.fill();
         ctx.stroke();
         ctx.beginPath();
@@ -275,9 +376,30 @@ function update(ov)
         }
     }
     
+    // Rings that spread out from each circle as it lands
+    ctx.lineWidth = lineWidth;
+    for (var i = 0; i < ripples.length; i++)
+    {
+        var rp = ripples[i];
+        var rpos = transform(rp.c);
+        ctx.strokeStyle = "rgba(0, 0, 0, " + (1 - rp.t / 16) + ")";
+        ctx.arc(rpos.x, rpos.y, (rp.c.radius + rp.t * 1.6) * camera.scale, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.beginPath();
+        if (!ov && ++rp.t >= 16)
+        {
+            ripples.splice(i, 1);
+            i--;
+        }
+    }
+    ctx.strokeStyle = "black";
+    
     ctx.fillStyle = "black";
     
-    ctx.arc(nweb.x, nweb.y, web.radius * camera.scale, 0, 2 * Math.PI);
+    // The hub pulses when a circle lands
+    if (!ov && web.pulse > 0)
+        web.pulse--;
+    ctx.arc(nweb.x, nweb.y, web.radius * camera.scale * (1 + .2 * web.pulse / 8), 0, 2 * Math.PI);
     ctx.fill();
     ctx.beginPath();
     
@@ -301,12 +423,12 @@ function update(ov)
         else if (!foundNotMoving && moving.indexOf(c) == -1)
             foundNotMoving = true;
         
-        c.x = (mc.width - c.radius * 2) / 2;
+        c.x = (W - c.radius * 2) / 2;
         c.y = cypos + i * (c.radius + 2) * 2 + circleRadius * 2 - c.ady + 10;
         
         var npos = transform(c);
         
-        if (npos.y - c.radius * camera.scale > mc.height)
+        if (npos.y - c.radius * camera.scale > H)
             break;
         ctx.strokeStyle = "black";
         ctx.arc(npos.x, npos.y, c.radius * camera.scale, 0, 2 * Math.PI);
@@ -336,6 +458,9 @@ function update(ov)
             web.attached.push(c);
             moving.splice(i, 1);
             circles.splice(i, 1);
+            c.hit = 10;
+            web.pulse = 8;
+            ripples.push({ c:c, t:0 });
             checkAttached(c);
             i--;
         }
@@ -360,6 +485,87 @@ function update(ov)
             var acc = 10e3;
             ctx.fillText("Time: " + Math.ceil(web.failTimer / 60) + "s", 2, 2 + fs);
         }
+    }
+    
+    // Corner word: tap or click it (or press L) to open the level select
+    ctx.fillStyle = "#aaa";
+    ctx.font = "11px Arial";
+    ctx.fillText("levels", W - 8 - ctx.measureText("levels").width, H - 8);
+}
+
+// Level select
+var selectCols = 6, selectCell = 50, selectTop = 90;
+function selectCellAt(x, y)
+{
+    var left = (W - selectCols * selectCell) / 2;
+    var col = Math.floor((x - left) / selectCell), row = Math.floor((y - selectTop) / selectCell);
+    if (col < 0 || col >= selectCols || row < 0)
+        return -1;
+    var n = row * selectCols + col;
+    return n < LEVELS.length ? n : -1;
+}
+function selectScreen()
+{
+    var n = LEVELS.length;
+    var left = (W - selectCols * selectCell) / 2;
+    
+    if (getkeydown(37))
+        selected--;
+    if (getkeydown(39))
+        selected++;
+    if (getkeydown(38))
+        selected -= selectCols;
+    if (getkeydown(40))
+        selected += selectCols;
+    selected = Math.max(0, Math.min(n - 1, selected));
+    
+    if ((getkeydown(27) || getkeydown(76)) && (circles.length || web.attached.length))    // Esc / L: back to the level in play
+    {
+        keydowns = [];
+        selecting = false;
+        return;
+    }
+    if (getkeydown(13) && selected <= progress.best)      // Enter: load the selected level
+    {
+        keydowns = [];
+        selecting = false;
+        loadLevel(selected);
+        return;
+    }
+    
+    ctx.fillStyle = "black";
+    var fs = 22;
+    ctx.font = fs + "px Arial";
+    ctx.fillText("levels", W / 2 - ctx.measureText("levels").width / 2, 40);
+    ctx.fillStyle = "#aaa";
+    ctx.font = "11px Arial";
+    var hint = "best " + progress.best + " of " + (n - 1) + "  ·  arrows + enter, or tap";
+    ctx.fillText(hint, W / 2 - ctx.measureText(hint).width / 2, 60);
+    
+    ctx.lineWidth = lineWidth;
+    for (var i = 0; i < n; i++)
+    {
+        var cx = left + (i % selectCols) * selectCell + selectCell / 2;
+        var cy = selectTop + Math.floor(i / selectCols) * selectCell + selectCell / 2;
+        var unlocked = i <= progress.best;
+        
+        ctx.arc(cx, cy, 18, 0, 2 * Math.PI);
+        if (i == selected)
+        {
+            ctx.fillStyle = unlocked ? "black" : "#ccc";
+            ctx.fill();
+            ctx.fillStyle = "white";
+        }
+        else
+        {
+            ctx.strokeStyle = unlocked ? "black" : "#ccc";
+            ctx.stroke();
+            ctx.fillStyle = unlocked ? "black" : "#ccc";
+        }
+        ctx.beginPath();
+        
+        ctx.font = "13px Arial";
+        ctx.fillText(i, cx - ctx.measureText(i).width / 2, cy + 5);
     }
 }
 
@@ -454,6 +660,9 @@ function restartLevel(av)
 function success()
 {
     mc.style.background = successColor;
+    progress.current = Math.min(clevel + 1, LEVELS.length - 1);
+    progress.best = Math.max(progress.best, progress.current);
+    saveProgress();
     buffered.push({
         effect:EFFECTS.timeout,
         op: { length:20 }
@@ -464,7 +673,21 @@ function success()
         buffered.push(function()
         {
             ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, mc.width, mc.height);
+            ctx.fillRect(0, 0, W, H);
+            ctx.fillStyle = "white";
+            ctx.font = "22px Arial";
+            ctx.fillText("aa", W / 2 - ctx.measureText("aa").width / 2, H / 2 - 10);
+            ctx.font = "11px Arial";
+            var line = "all " + LEVELS.length + " levels clear  ·  L or tap for levels";
+            ctx.fillText(line, W / 2 - ctx.measureText(line).width / 2, H / 2 + 14);
+            
+            if (getkeydown(76) || keydowns.indexOf(32) != -1)
+            {
+                keydowns = [];
+                selecting = true;
+                selected = clevel;
+                return true;
+            }
             return false;
         });
     }
@@ -482,17 +705,11 @@ function failure(ov)
     
     if (ov)
     {
-        buffered.push({
-            effect:EFFECTS.timeout,
-            op: { length:10 }
-        });
+        buffered.push(EFFECTS.shake);
     }
     else
     {
-        buffered.push({
-            effect:EFFECTS.timeout,
-            op: { length:10 }
-        }, EFFECTS.zoomIn, {
+        buffered.push(EFFECTS.shake, EFFECTS.zoomIn, {
             effect:EFFECTS.timeout,
             op: { length:20 }
         }, EFFECTS.zoomOut, {
@@ -517,6 +734,7 @@ function Web(op)
     this.rspeed = op.rspeed || 1;
     this.failTimer = 0;
     this.hideCount = true;
+    this.pulse = 0;
 }
 
 function Sprite(op)
@@ -528,6 +746,7 @@ function Sprite(op)
     this.color = op.color || "black";
     this.number = op.number || 1;
     this.ady = op.ady || 0;
+    this.hit = 0;
 }
 
 // Transform with camera
@@ -540,8 +759,8 @@ function transform(a, b)
     }
     
     return {
-        x:(a - camera.x - mc.width / 2) * camera.scale + mc.width / 2,
-        y:(b - camera.y - mc.height / 2) * camera.scale + mc.height / 2
+        x:(a - camera.x - W / 2) * camera.scale + W / 2,
+        y:(b - camera.y - H / 2) * camera.scale + H / 2
     };
 }
 function untransform(a, b)
@@ -553,8 +772,8 @@ function untransform(a, b)
     }
     
     return {
-        x:(a - mc.width / 2) / camera.scale + mc.width / 2 + camera.x,
-        y:(b - mc.height / 2) / camera.scale + mc.height / 2 + camera.y
+        x:(a - W / 2) / camera.scale + W / 2 + camera.x,
+        y:(b - H / 2) / camera.scale + H / 2 + camera.y
     };
 }
 
@@ -569,7 +788,7 @@ EFFECTS.fadeOut = function(op)
     }
     galpha = Math.min(galpha + (op.inc || .04), 1);
     ctx.fillStyle = "rgba(0, 0, 0, " + galpha + ")";
-    ctx.fillRect(0, 0, mc.width, mc.height);
+    ctx.fillRect(0, 0, W, H);
     
     if (galpha >= 1)
         return true;
@@ -585,7 +804,7 @@ EFFECTS.fadeIn = function(op)
     
     galpha = Math.max(galpha - (op.dec || .04), 0);
     ctx.fillStyle = "rgba(0, 0, 0, " + galpha + ")";
-    ctx.fillRect(0, 0, mc.width, mc.height);
+    ctx.fillRect(0, 0, W, H);
     
     if (galpha <= 0)
         return true;
@@ -601,7 +820,7 @@ EFFECTS.timeout = function(op)
     }
     
     ctx.fillStyle = "rgba(0, 0, 0, " + galpha + ")";
-    ctx.fillRect(0, 0, mc.width, mc.height);
+    ctx.fillRect(0, 0, W, H);
     
     op.current++;
     if (op.current >= op.length)
@@ -615,8 +834,8 @@ EFFECTS.circlesOut = function(op)
     if (typeof op.circles == "undefined")
     {
         op.circles = [];
-        for (var x = 0; x < mc.width + maxRadius / 2; x += maxRadius)
-            for (var y = 0; y < mc.height + maxRadius / 2; y += maxRadius)
+        for (var x = 0; x < W + maxRadius / 2; x += maxRadius)
+            for (var y = 0; y < H + maxRadius / 2; y += maxRadius)
                 op.circles.push({ x:x, y:y });
         op.cradius = 0;
     }
@@ -636,6 +855,34 @@ EFFECTS.circlesOut = function(op)
         return true;
     }
     
+    return false;
+}
+EFFECTS.shake = function(op)
+{
+    if (typeof op.first == "undefined")
+    {
+        op.length = op.length || 14;
+        op.amp = op.amp || 6;
+        op.current = 0;
+        op.first = false;
+    }
+    var left = 1 - op.current / op.length;
+    camera.x = (Math.random() - .5) * 2 * op.amp * left;
+    camera.y = (Math.random() - .5) * 2 * op.amp * left;
+    mc.width = mc.width;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    render();
+    
+    // A flash that fades with the shake
+    ctx.fillStyle = "rgba(255, 80, 80, " + (.5 * left) + ")";
+    ctx.fillRect(0, 0, W, H);
+    
+    op.current++;
+    if (op.current >= op.length)
+    {
+        camera.x = camera.y = 0;
+        return true;
+    }
     return false;
 }
 EFFECTS.zoomIn = function(op)
